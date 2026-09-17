@@ -67,7 +67,6 @@ venv.bak/
 !.env.example
 
 # IDEs
-.idea/
-.vscode/
-*.swp
-*.swo
+# Media files
+media/
+

@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'apps.users.apps.UsersConfig',
     'apps.common.apps.CommonConfig',
     'apps.notifications.apps.NotificationsConfig',
+    'apps.foods.apps.FoodsConfig',
 ]
 
 MIDDLEWARE = [
@@ -132,3 +133,8 @@ CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',') if origin.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+
+# Media Files Configuration
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
