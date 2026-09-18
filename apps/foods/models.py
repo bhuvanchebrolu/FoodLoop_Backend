@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
+from django.utils import timezone
 from datetime import date
 
 class FoodItem(models.Model):
@@ -58,7 +59,7 @@ class FoodItem(models.Model):
     quantity = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        validators=[MinValueValidator(0.01)]
+        validators=[MinValueValidator(0.00)]
     )
     unit = models.CharField(
         max_length=20,
@@ -104,13 +105,17 @@ class FoodItem(models.Model):
 
     def compute_status(self):
         """
-        Determines food status dynamically based on expiry date.
+        Determines food status dynamically based on expiry date and quantity.
+        - quantity <= 0 -> CONSUMED
         - Past expiry_date -> EXPIRED
         - 0 to 5 days remaining -> EXPIRING_SOON
         - > 5 days remaining -> AVAILABLE
         """
-        if self.status in [self.Status.CONSUMED, self.Status.SHARED]:
+        if self.status == self.Status.SHARED and self.quantity > 0:
             return self.status
+
+        if self.quantity <= 0:
+            return self.Status.CONSUMED
 
         today = date.today()
         if self.expiry_date < today:
@@ -121,7 +126,6 @@ class FoodItem(models.Model):
             return self.Status.AVAILABLE
 
     def save(self, *args, **kwargs):
-        # Auto-update status based on expiry_date before saving
         self.status = self.compute_status()
         super().save(*args, **kwargs)
 
@@ -131,3 +135,79 @@ class FoodItem(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.quantity} {self.unit}) - {self.user.email}"
+
+
+class ConsumptionRecord(models.Model):
+    food_item = models.ForeignKey(
+        FoodItem,
+        on_delete=models.CASCADE,
+        related_name='consumption_records'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='consumption_records'
+    )
+    quantity = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(0.01)]
+    )
+    unit = models.CharField(max_length=20)
+    consumed_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-consumed_at']
+        verbose_name = 'Consumption Record'
+        verbose_name_plural = 'Consumption Records'
+
+    def __str__(self):
+        return f"Consumed {self.quantity} {self.unit} of {self.food_item.name} ({self.user.email})"
+
+
+class WasteRecord(models.Model):
+    class Reason(models.TextChoices):
+        EXPIRED = 'EXPIRED', 'Expired'
+        SPOILED = 'SPOILED', 'Spoiled'
+        BOUGHT_TOO_MUCH = 'BOUGHT_TOO_MUCH', 'Bought Too Much'
+        NOT_CONSUMED = 'NOT_CONSUMED', 'Not Consumed'
+        OTHER = 'OTHER', 'Other'
+
+    food_item = models.ForeignKey(
+        FoodItem,
+        on_delete=models.CASCADE,
+        related_name='waste_records'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='waste_records'
+    )
+    quantity = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(0.01)]
+    )
+    unit = models.CharField(max_length=20)
+    reason = models.CharField(
+        max_length=30,
+        choices=Reason.choices,
+        default=Reason.EXPIRED
+    )
+    description = models.TextField(blank=True, default='')
+    estimated_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0.00
+    )
+    wasted_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-wasted_at']
+        verbose_name = 'Waste Record'
+        verbose_name_plural = 'Waste Records'
+
+    def __str__(self):
+        return f"Wasted {self.quantity} {self.unit} of {self.food_item.name} [{self.reason}] ({self.user.email})"

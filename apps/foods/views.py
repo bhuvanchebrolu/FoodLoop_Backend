@@ -1,12 +1,21 @@
 from rest_framework import status, permissions, generics, pagination
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.db import transaction, models
 from django.db.models import Q, Sum, Count
 from django.db.models.functions import Coalesce
 from decimal import Decimal
-from .models import FoodItem
-from .serializers import FoodItemSerializer, FoodDashboardSerializer
+from .models import FoodItem, ConsumptionRecord, WasteRecord
+from .serializers import (
+    FoodItemSerializer, 
+    FoodDashboardSerializer,
+    ConsumptionRecordSerializer,
+    ConsumeActionSerializer,
+    WasteRecordSerializer,
+    WasteActionSerializer
+)
 from apps.common.permissions import IsOwnerOrAdmin
+from apps.common.utils import log_activity
 
 class StandardResultsSetPagination(pagination.PageNumberPagination):
     page_size = 10
@@ -62,6 +71,9 @@ class FoodItemListCreateView(generics.ListCreateAPIView):
         status_param = self.request.query_params.get('status', '').strip()
         if status_param and status_param != 'ALL':
             queryset = queryset.filter(status=status_param.upper())
+        else:
+            # Exclude consumed / zero-quantity items from default active pantry inventory view
+            queryset = queryset.exclude(status=FoodItem.Status.CONSUMED).filter(quantity__gt=0)
 
         # 5. Sorting (?ordering=expiry_date)
         ordering = self.request.query_params.get('ordering', 'expiry_date').strip()
@@ -103,25 +115,27 @@ class FoodDashboardView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        # Update dynamic statuses for accurate metrics
         user_items = FoodItem.objects.filter(user=request.user)
         for item in user_items:
             new_status = item.compute_status()
             if new_status != item.status:
                 FoodItem.objects.filter(id=item.id).update(status=new_status)
 
-        total_food_items = user_items.count()
-        available_items = user_items.filter(status=FoodItem.Status.AVAILABLE).count()
-        expiring_soon = user_items.filter(status=FoodItem.Status.EXPIRING_SOON).count()
-        expired_items = user_items.filter(status=FoodItem.Status.EXPIRED).count()
+        active_items = user_items.exclude(status=FoodItem.Status.CONSUMED).filter(quantity__gt=0)
 
-        val_agg = user_items.aggregate(total_val=Sum('estimated_value'))
+        total_food_items = active_items.count()
+        available_items = active_items.filter(status=FoodItem.Status.AVAILABLE).count()
+        expiring_soon = active_items.filter(status=FoodItem.Status.EXPIRING_SOON).count()
+        expired_items = active_items.filter(status=FoodItem.Status.EXPIRED).count()
+        consumed_items = user_items.filter(Q(status=FoodItem.Status.CONSUMED) | Q(quantity__lte=0)).count()
+
+        val_agg = active_items.aggregate(total_val=Sum('estimated_value'))
         total_estimated_value = val_agg['total_val'] or Decimal('0.00')
 
-        cat_counts_qs = user_items.values('category').annotate(count=Count('id'))
+        cat_counts_qs = active_items.values('category').annotate(count=Count('id'))
         category_counts = {item['category']: item['count'] for item in cat_counts_qs}
 
-        storage_counts_qs = user_items.values('storage_location').annotate(count=Count('id'))
+        storage_counts_qs = active_items.values('storage_location').annotate(count=Count('id'))
         storage_counts = {item['storage_location']: item['count'] for item in storage_counts_qs}
 
         data = {
@@ -129,6 +143,7 @@ class FoodDashboardView(APIView):
             'available_items': available_items,
             'expiring_soon': expiring_soon,
             'expired_items': expired_items,
+            'consumed_items': consumed_items,
             'total_estimated_value': total_estimated_value,
             'category_counts': category_counts,
             'storage_counts': storage_counts,
@@ -136,3 +151,145 @@ class FoodDashboardView(APIView):
 
         serializer = FoodDashboardSerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ConsumeFoodView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, id):
+        serializer = ConsumeActionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                'message': 'Invalid consumption data.',
+                'errors': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        requested_qty = serializer.validated_data['quantity']
+
+        with transaction.atomic():
+            try:
+                food_item = FoodItem.objects.select_for_update().get(id=id, user=request.user)
+            except FoodItem.DoesNotExist:
+                return Response({'message': 'Food item not found or unauthorized.'}, status=status.HTTP_404_NOT_FOUND)
+
+            if food_item.quantity < requested_qty:
+                return Response({
+                    'message': f'Cannot consume {requested_qty} {food_item.unit}. Only {food_item.quantity} {food_item.unit} remaining.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            record = ConsumptionRecord.objects.create(
+                food_item=food_item,
+                user=request.user,
+                quantity=requested_qty,
+                unit=food_item.unit
+            )
+
+            food_item.quantity -= requested_qty
+            if food_item.quantity <= 0:
+                food_item.quantity = Decimal('0.00')
+                food_item.status = FoodItem.Status.CONSUMED
+
+            food_item.save()
+
+            log_activity(
+                user=request.user,
+                action='FOOD_CONSUMED',
+                entity_type='FoodItem',
+                entity_id=food_item.id,
+                metadata={'consumed_quantity': str(requested_qty), 'remaining_quantity': str(food_item.quantity)}
+            )
+
+            return Response({
+                'message': f'Recorded consumption of {requested_qty} {food_item.unit}.',
+                'food_item': FoodItemSerializer(food_item, context={'request': request}).data,
+                'consumption_record': ConsumptionRecordSerializer(record).data
+            }, status=status.HTTP_200_OK)
+
+
+class WasteFoodView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, id):
+        serializer = WasteActionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                'message': 'Invalid waste data.',
+                'errors': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        requested_qty = serializer.validated_data['quantity']
+        reason = serializer.validated_data['reason']
+        description = serializer.validated_data.get('description', '')
+
+        with transaction.atomic():
+            try:
+                food_item = FoodItem.objects.select_for_update().get(id=id, user=request.user)
+            except FoodItem.DoesNotExist:
+                return Response({'message': 'Food item not found or unauthorized.'}, status=status.HTTP_404_NOT_FOUND)
+
+            if food_item.quantity < requested_qty:
+                return Response({
+                    'message': f'Cannot record waste of {requested_qty} {food_item.unit}. Only {food_item.quantity} {food_item.unit} remaining.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            prorated_value = Decimal('0.00')
+            if food_item.quantity > 0 and food_item.estimated_value > 0:
+                ratio = requested_qty / food_item.quantity
+                prorated_value = (food_item.estimated_value * ratio).quantize(Decimal('0.01'))
+
+            record = WasteRecord.objects.create(
+                food_item=food_item,
+                user=request.user,
+                quantity=requested_qty,
+                unit=food_item.unit,
+                reason=reason,
+                description=description,
+                estimated_value=prorated_value
+            )
+
+            food_item.quantity -= requested_qty
+            if food_item.quantity <= 0:
+                food_item.quantity = Decimal('0.00')
+                food_item.status = FoodItem.Status.EXPIRED
+
+            food_item.save()
+
+            log_activity(
+                user=request.user,
+                action='FOOD_WASTED',
+                entity_type='FoodItem',
+                entity_id=food_item.id,
+                metadata={'wasted_quantity': str(requested_qty), 'reason': reason, 'remaining_quantity': str(food_item.quantity)}
+            )
+
+            return Response({
+                'message': f'Recorded waste of {requested_qty} {food_item.unit}.',
+                'food_item': FoodItemSerializer(food_item, context={'request': request}).data,
+                'waste_record': WasteRecordSerializer(record).data
+            }, status=status.HTTP_200_OK)
+
+
+class ConsumptionHistoryView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ConsumptionRecordSerializer
+    pagination_class = StandardResultsSetPagination
+
+    def get_queryset(self):
+        queryset = ConsumptionRecord.objects.filter(user=self.request.user)
+        food_id = self.kwargs.get('id')
+        if food_id:
+            queryset = queryset.filter(food_item_id=food_id)
+        return queryset
+
+
+class WasteHistoryView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = WasteRecordSerializer
+    pagination_class = StandardResultsSetPagination
+
+    def get_queryset(self):
+        queryset = WasteRecord.objects.filter(user=self.request.user)
+        food_id = self.kwargs.get('id')
+        if food_id:
+            queryset = queryset.filter(food_item_id=food_id)
+        return queryset
