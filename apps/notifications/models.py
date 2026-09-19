@@ -7,9 +7,13 @@ class Notification(models.Model):
         EXPIRY_WARNING = 'EXPIRY_WARNING', 'Expiry Warning'
         EXPIRY_URGENT = 'EXPIRY_URGENT', 'Expiry Urgent'
         FOOD_EXPIRED = 'FOOD_EXPIRED', 'Food Expired'
-        SHARE_REQUEST = 'SHARE_REQUEST', 'Share Request'
-        REQUEST_ACCEPTED = 'REQUEST_ACCEPTED', 'Request Accepted'
-        FOOD_CLAIMED = 'FOOD_CLAIMED', 'Food Claimed'
+        SHARE_CREATED = 'SHARE_CREATED', 'Share Created'
+        SHARE_REQUEST_RECEIVED = 'SHARE_REQUEST_RECEIVED', 'Share Request Received'
+        SHARE_REQUEST_APPROVED = 'SHARE_REQUEST_APPROVED', 'Share Request Approved'
+        SHARE_REQUEST_REJECTED = 'SHARE_REQUEST_REJECTED', 'Share Request Rejected'
+        SHARE_REQUEST_CANCELLED = 'SHARE_REQUEST_CANCELLED', 'Share Request Cancelled'
+        SHARE_CLAIMED = 'SHARE_CLAIMED', 'Share Claimed'
+        SHARE_CANCELLED = 'SHARE_CANCELLED', 'Share Cancelled'
 
     class Priority(models.TextChoices):
         URGENT = 'URGENT', 'Urgent'

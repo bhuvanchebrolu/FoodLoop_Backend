@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'apps.common.apps.CommonConfig',
     'apps.notifications.apps.NotificationsConfig',
     'apps.foods.apps.FoodsConfig',
+    'apps.shares.apps.SharesConfig',
 ]
 
 MIDDLEWARE = [
