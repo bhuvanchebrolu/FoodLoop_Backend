@@ -14,6 +14,7 @@ class Notification(models.Model):
         SHARE_REQUEST_CANCELLED = 'SHARE_REQUEST_CANCELLED', 'Share Request Cancelled'
         SHARE_CLAIMED = 'SHARE_CLAIMED', 'Share Claimed'
         SHARE_CANCELLED = 'SHARE_CANCELLED', 'Share Cancelled'
+        SYSTEM = 'SYSTEM', 'System Notification'
 
     class Priority(models.TextChoices):
         URGENT = 'URGENT', 'Urgent'

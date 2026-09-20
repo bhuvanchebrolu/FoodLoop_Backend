@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'apps.notifications.apps.NotificationsConfig',
     'apps.foods.apps.FoodsConfig',
     'apps.shares.apps.SharesConfig',
+    'apps.reports',
 ]
 
 MIDDLEWARE = [

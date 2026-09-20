@@ -4,7 +4,8 @@ from .views import (
     LoginView, 
     LogoutView, 
     CurrentUserView,
-    ProfileView
+    ProfileView,
+    ProfileSummaryView
 )
 
 urlpatterns = [
@@ -13,4 +14,5 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='auth-logout'),
     path('me/', CurrentUserView.as_view(), name='auth-me'),
     path('profile/', ProfileView.as_view(), name='auth-profile'),
+    path('profile-summary/', ProfileSummaryView.as_view(), name='auth-profile-summary'),
 ]
