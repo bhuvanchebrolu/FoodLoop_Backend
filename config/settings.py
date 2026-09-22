@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'apps.foods.apps.FoodsConfig',
     'apps.shares.apps.SharesConfig',
     'apps.reports',
+    'apps.analytics.apps.AnalyticsConfig',
 ]
 
 MIDDLEWARE = [

@@ -10,6 +10,7 @@ class FoodShareSerializer(serializers.ModelSerializer):
     food_category = serializers.ReadOnlyField(source='food_item.category')
     food_photo_url = serializers.SerializerMethodField()
     expiry_date = serializers.ReadOnlyField(source='food_item.expiry_date')
+    owner = serializers.SerializerMethodField()
     owner_name = serializers.ReadOnlyField(source='owner.full_name')
     owner_flat = serializers.ReadOnlyField(source='owner.flat_number')
     owner_apartment = serializers.ReadOnlyField(source='owner.display_apartment_name')
@@ -17,6 +18,8 @@ class FoodShareSerializer(serializers.ModelSerializer):
     is_saved = serializers.SerializerMethodField()
     pending_requests_count = serializers.SerializerMethodField()
     user_request = serializers.SerializerMethodField()
+    has_active_request = serializers.SerializerMethodField()
+    requests = serializers.SerializerMethodField()
 
     class Meta:
         model = FoodShare
@@ -45,9 +48,22 @@ class FoodShareSerializer(serializers.ModelSerializer):
             'is_owner',
             'is_saved',
             'pending_requests_count',
-            'user_request'
+            'user_request',
+            'has_active_request',
+            'requests'
         ]
         read_only_fields = ['id', 'owner', 'status', 'created_at', 'updated_at']
+
+    def get_owner(self, obj):
+        if obj.owner:
+            return {
+                'id': obj.owner.id,
+                'full_name': obj.owner.full_name,
+                'email': obj.owner.email,
+                'flat_number': obj.owner.flat_number,
+                'apartment': obj.owner.display_apartment_name
+            }
+        return None
 
     def get_food_photo_url(self, obj):
         if obj.food_item and obj.food_item.photo:
@@ -90,9 +106,29 @@ class FoodShareSerializer(serializers.ModelSerializer):
                 }
         return None
 
+    def get_has_active_request(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.requests.filter(requester=request.user).exclude(
+                status__in=[ShareRequest.Status.CANCELLED, ShareRequest.Status.REJECTED]
+            ).exists()
+        return False
+
+    def get_requests(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated and obj.owner_id == request.user.id:
+            reqs = obj.requests.all().order_by('-created_at')
+            return ShareRequestSerializer(reqs, many=True, context=self.context).data
+        return []
+
 
 class FoodShareCreateSerializer(serializers.ModelSerializer):
     food_item_id = serializers.IntegerField(write_only=True)
+    title = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    unit = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    description = serializers.CharField(required=False, allow_blank=True)
+    pickup_note = serializers.CharField(required=False, allow_blank=True)
+    expires_at = serializers.DateField(required=False, allow_null=True)
 
     class Meta:
         model = FoodShare
@@ -147,6 +183,8 @@ class FoodShareCreateSerializer(serializers.ModelSerializer):
             attrs['title'] = food_item.name
         if not attrs.get('unit'):
             attrs['unit'] = food_item.unit
+        if not attrs.get('expires_at'):
+            attrs['expires_at'] = food_item.expiry_date
 
         return attrs
 
@@ -157,6 +195,7 @@ class ShareRequestSerializer(serializers.ModelSerializer):
     share_unit = serializers.ReadOnlyField(source='share.unit')
     share_owner_name = serializers.ReadOnlyField(source='share.owner.full_name')
     share_owner_flat = serializers.ReadOnlyField(source='share.owner.flat_number')
+    requester = serializers.SerializerMethodField()
     requester_name = serializers.ReadOnlyField(source='requester.full_name')
     requester_flat = serializers.ReadOnlyField(source='requester.flat_number')
     requester_email = serializers.ReadOnlyField(source='requester.email')
@@ -184,6 +223,16 @@ class ShareRequestSerializer(serializers.ModelSerializer):
             'updated_at'
         ]
         read_only_fields = ['id', 'share', 'requester', 'status', 'created_at', 'updated_at']
+
+    def get_requester(self, obj):
+        if obj.requester:
+            return {
+                'id': obj.requester.id,
+                'full_name': obj.requester.full_name,
+                'email': obj.requester.email,
+                'flat_number': obj.requester.flat_number
+            }
+        return None
 
     def get_food_photo_url(self, obj):
         if obj.share and obj.share.food_item and obj.share.food_item.photo:

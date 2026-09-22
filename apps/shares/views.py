@@ -451,6 +451,26 @@ class ShareRequestCompleteView(APIView):
             req_obj.status = ShareRequest.Status.COMPLETED
             req_obj.save()
 
+            # 3. Automatically transfer claimed food item to requester's smart pantry
+            claimed_value = Decimal('0.00')
+            if hasattr(food_item, 'initial_quantity') and food_item.initial_quantity and food_item.initial_quantity > Decimal('0.00'):
+                claimed_value = food_item.estimated_value * (completed_qty / food_item.initial_quantity)
+            elif food_item.quantity > Decimal('0.00'):
+                claimed_value = food_item.estimated_value * (completed_qty / food_item.quantity)
+
+            FoodItem.objects.create(
+                user=req_obj.requester,
+                name=share.title or food_item.name,
+                category=food_item.category,
+                quantity=completed_qty,
+                unit=share.unit,
+                purchase_date=date.today(),
+                expiry_date=food_item.expiry_date,
+                storage_location=food_item.storage_location,
+                estimated_value=claimed_value,
+                status=FoodItem.Status.AVAILABLE
+            )
+
             log_activity(
                 user=request.user,
                 action='SHARE_COMPLETED',
@@ -512,3 +532,12 @@ class MyRequestsListView(generics.ListAPIView):
 
     def get_queryset(self):
         return ShareRequest.objects.filter(requester=self.request.user).order_by('-created_at')
+
+
+class IncomingRequestsListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ShareRequestSerializer
+    pagination_class = StandardResultsSetPagination
+
+    def get_queryset(self):
+        return ShareRequest.objects.filter(share__owner=self.request.user).order_by('-created_at')

@@ -11,7 +11,8 @@ from .views import (
     ShareRequestCompleteView,
     SavedShareToggleView,
     MySharesListView,
-    MyRequestsListView
+    MyRequestsListView,
+    IncomingRequestsListView
 )
 
 urlpatterns = [
@@ -19,6 +20,7 @@ urlpatterns = [
     path('create/', FoodShareCreateView.as_view(), name='share-create'),
     path('my-shares/', MySharesListView.as_view(), name='my-shares'),
     path('my-requests/', MyRequestsListView.as_view(), name='my-requests'),
+    path('incoming-requests/', IncomingRequestsListView.as_view(), name='incoming-requests'),
     path('<int:id>/', FoodShareDetailView.as_view(), name='share-detail'),
     path('<int:id>/cancel/', FoodShareCancelView.as_view(), name='share-cancel'),
     path('<int:id>/request/', ShareRequestCreateView.as_view(), name='share-request'),

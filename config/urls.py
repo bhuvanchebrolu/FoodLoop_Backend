@@ -14,6 +14,7 @@ urlpatterns = [
     path('api/foods/', include('apps.foods.urls')),
     path('api/shares/', include('apps.shares.urls')),
     path('api/reports/', include('apps.reports.urls')),
+    path('api/analytics/', include('apps.analytics.urls')),
     path('api/activity/', UserActivityListView.as_view(), name='user-activity'),
     path('api/', include('apps.notifications.urls')),
 ]

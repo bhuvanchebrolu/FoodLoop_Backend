@@ -125,6 +125,18 @@ class FoodItem(models.Model):
         else:
             return self.Status.AVAILABLE
 
+    class Meta:
+        ordering = ['expiry_date']
+        verbose_name = 'Food Item'
+        verbose_name_plural = 'Food Items'
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['status']),
+            models.Index(fields=['category']),
+            models.Index(fields=['expiry_date']),
+            models.Index(fields=['created_at']),
+        ]
+
     def save(self, *args, **kwargs):
         self.status = self.compute_status()
         super().save(*args, **kwargs)
@@ -161,6 +173,10 @@ class ConsumptionRecord(models.Model):
         ordering = ['-consumed_at']
         verbose_name = 'Consumption Record'
         verbose_name_plural = 'Consumption Records'
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['consumed_at']),
+        ]
 
     def __str__(self):
         return f"Consumed {self.quantity} {self.unit} of {self.food_item.name} ({self.user.email})"
@@ -208,6 +224,11 @@ class WasteRecord(models.Model):
         ordering = ['-wasted_at']
         verbose_name = 'Waste Record'
         verbose_name_plural = 'Waste Records'
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['wasted_at']),
+            models.Index(fields=['reason']),
+        ]
 
     def __str__(self):
         return f"Wasted {self.quantity} {self.unit} of {self.food_item.name} [{self.reason}] ({self.user.email})"
