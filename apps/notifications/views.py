@@ -175,3 +175,112 @@ class AlertSummaryView(APIView):
 
         serializer = AlertSummarySerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class DeviceRegisterView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from .models import DeviceToken
+        from .serializers import DeviceTokenRegisterSerializer, DeviceTokenSerializer
+
+        serializer = DeviceTokenRegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({'message': 'Invalid registration data.', 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        token = serializer.validated_data['token']
+        device_name = serializer.validated_data.get('device_name') or 'Browser'
+
+        # Idempotent registration: update owner and set active
+        device_obj, created = DeviceToken.objects.update_or_create(
+            token=token,
+            defaults={
+                'user': request.user,
+                'device_name': device_name,
+                'is_active': True
+            }
+        )
+
+        log_activity(
+            user=request.user,
+            action='DEVICE_REGISTERED' if created else 'DEVICE_UPDATED',
+            entity_type='DeviceToken',
+            entity_id=device_obj.id,
+            metadata={'device_name': device_name}
+        )
+
+        return Response({
+            'message': 'Device registered for push notifications successfully.',
+            'device': DeviceTokenSerializer(device_obj).data
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class DeviceUnregisterView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, id):
+        from .models import DeviceToken
+
+        try:
+            device_obj = DeviceToken.objects.get(id=id, user=request.user)
+        except DeviceToken.DoesNotExist:
+            return Response({'message': 'Device registration not found or unauthorized.'}, status=status.HTTP_404_NOT_FOUND)
+
+        device_obj.is_active = False
+        device_obj.save(update_fields=['is_active', 'updated_at'])
+
+        log_activity(
+            user=request.user,
+            action='DEVICE_DEACTIVATED',
+            entity_type='DeviceToken',
+            entity_id=device_obj.id
+        )
+
+        return Response({'message': 'Device token deactivated successfully.'}, status=status.HTTP_200_OK)
+
+
+class DeviceListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from .models import DeviceToken
+        from .serializers import DeviceTokenSerializer
+
+        devices = DeviceToken.objects.filter(user=request.user, is_active=True)
+        return Response({
+            'count': devices.count(),
+            'results': DeviceTokenSerializer(devices, many=True).data
+        }, status=status.HTTP_200_OK)
+
+
+class DevTestPushView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from django.conf import settings
+        from .firebase import send_push_notification
+
+        if not settings.DEBUG:
+            return Response({'message': 'Test push endpoint is only available in DEBUG mode.'}, status=status.HTTP_403_FORBIDDEN)
+
+        title = request.data.get('title') or "FoodLoop FCM Test 🔔"
+        body = request.data.get('body') or "Firebase Web Push Notifications are working perfectly!"
+
+        success = send_push_notification(
+            user=request.user,
+            title=title,
+            body=body,
+            data={'type': 'DEV_TEST'}
+        )
+
+        if success:
+            return Response({
+                'message': f"Test push notification sent successfully to active devices of {request.user.email}.",
+                'success': True
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'message': "Push notification could not be delivered. Ensure you have enabled browser push notifications and Firebase environment variables are configured.",
+                'success': False
+            }, status=status.HTTP_400_BAD_REQUEST)
+

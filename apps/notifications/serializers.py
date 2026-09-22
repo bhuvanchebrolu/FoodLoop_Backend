@@ -74,3 +74,17 @@ class AlertSummarySerializer(serializers.Serializer):
     good_count = serializers.IntegerField()
     expired_count = serializers.IntegerField()
     total_alerts = serializers.IntegerField()
+
+
+class DeviceTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models import DeviceToken
+        model = DeviceToken
+        fields = ['id', 'token', 'device_name', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'is_active', 'created_at', 'updated_at']
+
+
+class DeviceTokenRegisterSerializer(serializers.Serializer):
+    token = serializers.CharField(required=True)
+    device_name = serializers.CharField(required=False, allow_blank=True, default='Browser')
+

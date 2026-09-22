@@ -95,5 +95,18 @@ class ExpiryEngineService:
                     metadata={'food_item_id': item.id, 'type': notif_type}
                 )
 
+                # Attempt FCM Web Push notification delivery
+                try:
+                    from .firebase import send_push_notification
+                    send_push_notification(
+                        user=item.user,
+                        title=title,
+                        body=message,
+                        notification_id=notif.id,
+                        data={'type': notif_type, 'food_item_id': str(item.id)}
+                    )
+                except Exception as exc:
+                    logger.warning(f"FCM push trigger exception (ignored): {exc}")
+
         logger.info(f"ExpiryEngine: Processed items. Generated {created_count} new notifications.")
         return created_count

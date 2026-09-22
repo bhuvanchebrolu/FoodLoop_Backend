@@ -60,3 +60,63 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"[{self.priority}] {self.title} - {self.user.email} ({'Read' if self.is_read else 'Unread'})"
+
+
+class DeviceToken(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='device_tokens'
+    )
+    token = models.TextField(unique=True)
+    device_name = models.CharField(max_length=100, blank=True, default='Browser')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = 'Device Token'
+        verbose_name_plural = 'Device Tokens'
+
+    def __str__(self):
+        return f"{self.user.email} - {self.device_name} ({'Active' if self.is_active else 'Inactive'})"
+
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+import logging
+
+logger = logging.getLogger(__name__)
+
+@receiver(post_save, sender=Notification)
+def trigger_fcm_push_notification(sender, instance, created, **kwargs):
+    if not created:
+        return
+
+    # Check user settings
+    settings_obj = getattr(instance.user, 'settings', None)
+    if settings_obj:
+        if instance.type in [Notification.Type.EXPIRY_WARNING, Notification.Type.EXPIRY_URGENT, Notification.Type.FOOD_EXPIRED]:
+            if not settings_obj.expiry_notifications:
+                return
+        elif str(instance.type).startswith('SHARE_'):
+            if not settings_obj.share_notifications:
+                return
+
+    try:
+        from .firebase import send_push_notification
+        send_push_notification(
+            user=instance.user,
+            title=instance.title,
+            body=instance.message,
+            notification_id=instance.id,
+            data={
+                'type': instance.type,
+                'food_item_id': str(instance.food_item_id) if instance.food_item_id else ''
+            }
+        )
+    except Exception as exc:
+        logger.warning(f"FCM post_save signal push trigger failed safely: {exc}")
+
+

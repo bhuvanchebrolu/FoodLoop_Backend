@@ -195,3 +195,53 @@ class Phase3BackendTests(TestCase):
         self.assertEqual(res_urgent.status_code, status.HTTP_200_OK)
         self.assertEqual(res_urgent.data['count'], 1)
         self.assertEqual(res_urgent.data['results'][0]['name'], "Whole Milk")
+
+    # 5. FCM Device Token & Push Isolation Tests
+    def test_device_token_registration_and_idempotency(self):
+        self.client.force_authenticate(user=self.user1)
+        url = reverse('device-register')
+        
+        # 1. First registration
+        payload = {"token": "fcm_test_token_12345", "device_name": "Chrome Windows"}
+        res1 = self.client.post(url, payload)
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res1.data['device']['token'], "fcm_test_token_12345")
+        
+        from apps.notifications.models import DeviceToken
+        self.assertEqual(DeviceToken.objects.filter(user=self.user1, token="fcm_test_token_12345").count(), 1)
+
+        # 2. Idempotent re-registration with updated device name
+        payload2 = {"token": "fcm_test_token_12345", "device_name": "Chrome Laptop Updated"}
+        res2 = self.client.post(url, payload2)
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertEqual(DeviceToken.objects.filter(user=self.user1, token="fcm_test_token_12345").count(), 1)
+        device = DeviceToken.objects.get(user=self.user1, token="fcm_test_token_12345")
+        self.assertEqual(device.device_name, "Chrome Laptop Updated")
+
+    def test_device_token_unregistration_and_ownership(self):
+        from apps.notifications.models import DeviceToken
+        dev = DeviceToken.objects.create(user=self.user1, token="token_user1_secret", device_name="User1 Device")
+
+        # User 2 tries to delete User 1's device -> 404 / Unauthorized
+        self.client.force_authenticate(user=self.user2)
+        res_unauth = self.client.delete(reverse('device-unregister', kwargs={'id': dev.id}))
+        self.assertEqual(res_unauth.status_code, status.HTTP_404_NOT_FOUND)
+
+        # User 1 deletes their own device -> 200 OK & deactivated
+        self.client.force_authenticate(user=self.user1)
+        res_auth = self.client.delete(reverse('device-unregister', kwargs={'id': dev.id}))
+        self.assertEqual(res_auth.status_code, status.HTTP_200_OK)
+        dev.refresh_from_db()
+        self.assertFalse(dev.is_active)
+
+    def test_fcm_failure_isolation(self):
+        # Verify that PostgreSQL notification creation persists regardless of FCM availability
+        notif = Notification.objects.create(
+            user=self.user1,
+            title="Test Push Isolation",
+            message="Ensuring DB persistence even if FCM fails",
+            priority=Notification.Priority.WARNING
+        )
+        self.assertIsNotNone(notif.id)
+        self.assertTrue(Notification.objects.filter(id=notif.id).exists())
+
