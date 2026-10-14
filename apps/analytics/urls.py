@@ -4,7 +4,10 @@ from .views import (
     AnalyticsConsumptionView,
     AnalyticsWasteView,
     AnalyticsSharingView,
-    AnalyticsImpactView
+    AnalyticsImpactView,
+    AnalyticsLeaderboardView,
+    AnalyticsTrendsView,
+    AnalyticsBadgesView
 )
 
 urlpatterns = [
@@ -13,4 +16,7 @@ urlpatterns = [
     path('waste/', AnalyticsWasteView.as_view(), name='analytics-waste'),
     path('sharing/', AnalyticsSharingView.as_view(), name='analytics-sharing'),
     path('impact/', AnalyticsImpactView.as_view(), name='analytics-impact'),
+    path('leaderboard/', AnalyticsLeaderboardView.as_view(), name='analytics-leaderboard'),
+    path('trends/', AnalyticsTrendsView.as_view(), name='analytics-trends'),
+    path('badges/', AnalyticsBadgesView.as_view(), name='analytics-badges'),
 ]

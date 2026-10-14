@@ -143,27 +143,53 @@ class ProfileSummaryView(APIView):
 
 
 def get_profile_summary_response(user):
-    from django.db.models import Sum
-    from apps.foods.models import FoodItem, ConsumptionRecord, WasteRecord
-    from apps.shares.models import FoodShare, ShareRequest
+    from django.db import connection
 
-    items_added = FoodItem.objects.filter(user=user).count()
-    consumed_agg = ConsumptionRecord.objects.filter(user=user).aggregate(total=Sum('quantity'))
-    consumed_total = float(consumed_agg['total'] or 0.0)
-    consumed_count = ConsumptionRecord.objects.filter(user=user).count()
+    sql_profile = """
+    WITH user_foods AS (
+        SELECT id FROM foods_fooditem WHERE user_id = %s
+    ),
+    user_consumed AS (
+        SELECT id, quantity FROM foods_consumptionrecord WHERE user_id = %s
+    ),
+    user_wasted AS (
+        SELECT id, quantity FROM foods_wasterecord WHERE user_id = %s
+    ),
+    user_shares AS (
+        SELECT id, status, initial_quantity FROM shares_foodshare WHERE owner_id = %s
+    ),
+    user_requests AS (
+        SELECT id, status FROM shares_sharerequest WHERE requester_id = %s
+    )
+    SELECT 
+        (SELECT COUNT(*) FROM user_foods) AS items_added,
+        (SELECT COUNT(*) FROM user_consumed) AS consumed_count,
+        (SELECT COALESCE(SUM(quantity), 0.0) FROM user_consumed) AS consumed_total_kg,
+        (SELECT COUNT(*) FROM user_wasted) AS wasted_count,
+        (SELECT COALESCE(SUM(quantity), 0.0) FROM user_wasted) AS wasted_total_kg,
+        (SELECT COUNT(*) FROM user_shares) AS shares_created,
+        (SELECT COUNT(*) FROM user_shares WHERE status = 'COMPLETED') AS shares_completed,
+        (SELECT COALESCE(SUM(initial_quantity), 0.0) FROM user_shares WHERE status = 'COMPLETED') AS food_shared_kg,
+        (SELECT COUNT(*) FROM user_requests) AS requests_made,
+        (SELECT COUNT(*) FROM user_requests WHERE status = 'COMPLETED') AS requests_completed;
+    """
 
-    wasted_agg = WasteRecord.objects.filter(user=user).aggregate(total=Sum('quantity'))
-    wasted_total = float(wasted_agg['total'] or 0.0)
-    wasted_count = WasteRecord.objects.filter(user=user).count()
+    params = [user.id, user.id, user.id, user.id, user.id]
 
-    shares_created = FoodShare.objects.filter(owner=user).count()
-    shares_completed_qs = FoodShare.objects.filter(owner=user, status=FoodShare.Status.COMPLETED)
-    shares_completed = shares_completed_qs.count()
+    with connection.cursor() as cursor:
+        cursor.execute(sql_profile, params)
+        row = cursor.fetchone()
+        (
+            items_added, consumed_count, consumed_total_kg,
+            wasted_count, wasted_total_kg, shares_created,
+            shares_completed, food_shared_kg, requests_made,
+            requests_completed
+        ) = row
 
-    requests_made = ShareRequest.objects.filter(requester=user).count()
-    requests_completed = ShareRequest.objects.filter(requester=user, status=ShareRequest.Status.COMPLETED).count()
+    consumed_total = float(consumed_total_kg or 0.0)
+    wasted_total = float(wasted_total_kg or 0.0)
+    food_shared_kg = float(food_shared_kg or 0.0)
 
-    food_shared_kg = float(shares_completed_qs.aggregate(total=Sum('initial_quantity'))['total'] or 0.0)
     food_saved_kg = round(consumed_total + food_shared_kg, 2)
     diverted_waste_kg = round(food_shared_kg + (consumed_total * 0.8), 2)
     estimated_value_saved_inr = round(food_saved_kg * 150.0, 2)

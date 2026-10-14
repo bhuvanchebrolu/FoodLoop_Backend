@@ -2,7 +2,7 @@ from rest_framework import status, permissions, generics, pagination
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.utils import timezone
-from django.db import transaction
+from django.db import transaction, models
 
 from .models import Report
 from .serializers import (
@@ -240,3 +240,83 @@ class AdminReportDismissView(APIView):
             'message': 'Report dismissed.',
             'report': ReportSerializer(report).data
         }, status=status.HTTP_200_OK)
+
+
+class AdminReportSummaryView(APIView):
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        from django.db import connection
+
+        # Heavy SQL query featuring WITH CTE, COUNT(CASE WHEN), GROUP BY, and ORDER BY
+        sql_summary = """
+        WITH report_data AS (
+            SELECT 
+                id, 
+                target_type, 
+                reason, 
+                status 
+            FROM reports_report
+        )
+        SELECT 
+            COUNT(*) AS total_reports,
+            COUNT(CASE WHEN status = 'PENDING' THEN 1 END) AS pending_count,
+            COUNT(CASE WHEN status = 'UNDER_REVIEW' THEN 1 END) AS under_review_count,
+            COUNT(CASE WHEN status = 'RESOLVED' THEN 1 END) AS resolved_count,
+            COUNT(CASE WHEN status = 'DISMISSED' THEN 1 END) AS dismissed_count
+        FROM report_data;
+        """
+
+        with connection.cursor() as cursor:
+            cursor.execute(sql_summary)
+            row = cursor.fetchone()
+            total_reports, pending_count, under_review_count, resolved_count, dismissed_count = row
+
+        # Group by target type with COUNT and ORDER BY
+        by_target_qs = Report.objects.values('target_type').annotate(count=models.Count('id')).order_by('-count')
+        by_target = {item['target_type']: item['count'] for item in by_target_qs}
+
+        # Group by reason with COUNT and ORDER BY
+        by_reason_qs = Report.objects.values('reason').annotate(count=models.Count('id')).order_by('-count')
+        by_reason = {item['reason']: item['count'] for item in by_reason_qs}
+
+        return Response({
+            'total_reports': total_reports or 0,
+            'pending_count': pending_count or 0,
+            'under_review_count': under_review_count or 0,
+            'resolved_count': resolved_count or 0,
+            'dismissed_count': dismissed_count or 0,
+            'by_target_type': by_target,
+            'by_reason': by_reason,
+        }, status=status.HTTP_200_OK)
+
+
+class AuditLogListView(APIView):
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        from django.db import connection
+
+        # Querying Partitioned Table audit_activitylog
+        sql_audit = """
+        SELECT id, user_id, action, entity_type, entity_id, created_at
+        FROM audit_activitylog
+        ORDER BY created_at DESC
+        LIMIT 50;
+        """
+
+        logs = []
+        with connection.cursor() as cursor:
+            cursor.execute(sql_audit)
+            rows = cursor.fetchall()
+            for r in rows:
+                logs.append({
+                    'id': r[0],
+                    'user_id': r[1],
+                    'action': r[2],
+                    'entity_type': r[3],
+                    'entity_id': r[4],
+                    'created_at': r[5].isoformat() if r[5] else None
+                })
+
+        return Response({'logs': logs}, status=status.HTTP_200_OK)

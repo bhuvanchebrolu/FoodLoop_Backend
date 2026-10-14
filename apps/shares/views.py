@@ -1,7 +1,7 @@
 from rest_framework import status, permissions, generics, pagination
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.db import transaction
+from django.db import transaction, models
 from django.db.models import Q, Sum
 from django.utils import timezone
 from decimal import Decimal
@@ -44,17 +44,21 @@ class CommunityShareListView(generics.ListAPIView):
     def get_queryset(self):
         user = self.request.user
         
-        # 1. Update dynamic statuses for active shares
-        active_shares = FoodShare.objects.filter(
-            status__in=[FoodShare.Status.AVAILABLE, FoodShare.Status.PARTIALLY_CLAIMED]
-        ).select_related('food_item')
-        
-        for s in active_shares:
-            new_status = s.compute_status()
-            if new_status != s.status:
-                FoodShare.objects.filter(id=s.id).update(status=new_status)
+        # 1. Update dynamic statuses for active shares using DB Subquery updates
+        expired_share_ids = FoodShare.objects.filter(
+            status__in=[FoodShare.Status.AVAILABLE, FoodShare.Status.PARTIALLY_CLAIMED],
+            food_item__expiry_date__lt=timezone.now().date()
+        ).values('id')
 
-        # 2. Base Apartment Isolation Query
+        completed_share_ids = FoodShare.objects.filter(
+            status__in=[FoodShare.Status.AVAILABLE, FoodShare.Status.PARTIALLY_CLAIMED],
+            quantity__lte=0
+        ).values('id')
+
+        FoodShare.objects.filter(id__in=models.Subquery(expired_share_ids)).update(status=FoodShare.Status.EXPIRED)
+        FoodShare.objects.filter(id__in=models.Subquery(completed_share_ids)).update(status=FoodShare.Status.COMPLETED)
+
+        # 2. Multi-table JOIN & Subquery Isolation Query
         queryset = FoodShare.objects.select_related('food_item', 'owner', 'owner__apartment')
 
         scope = self.request.query_params.get('scope', '').strip().lower()
@@ -62,10 +66,11 @@ class CommunityShareListView(generics.ListAPIView):
         if scope == 'mine':
             queryset = queryset.filter(owner=user)
         elif scope == 'saved':
-            saved_ids = SavedShare.objects.filter(user=user).values_list('share_id', flat=True)
-            queryset = queryset.filter(id__in=saved_ids)
+            # Subquery for saved shares
+            saved_subquery = SavedShare.objects.filter(user=user).values('share_id')
+            queryset = queryset.filter(id__in=models.Subquery(saved_subquery))
         else:
-            # Community Feed: filter by apartment isolation & active status
+            # Community Feed: filter by apartment isolation & active status using nested Q & Subquery
             if user.apartment:
                 queryset = queryset.filter(
                     Q(owner__apartment=user.apartment) | Q(owner=user)
@@ -85,7 +90,7 @@ class CommunityShareListView(generics.ListAPIView):
                     quantity__gt=0
                 )
 
-        # 3. Search Filter (?search=milk)
+        # 3. Multi-field Search Filter (?search=milk)
         search = self.request.query_params.get('search', '').strip()
         if search:
             queryset = queryset.filter(
@@ -95,7 +100,7 @@ class CommunityShareListView(generics.ListAPIView):
                 Q(food_item__category__icontains=search)
             )
 
-        # 4. Category Filter (?category=DAIRY)
+        # 4. Category Filter (?category=DAIRY) via Foreign Key JOIN
         category = self.request.query_params.get('category', '').strip()
         if category and category != 'ALL':
             queryset = queryset.filter(food_item__category=category.upper())
@@ -541,3 +546,71 @@ class IncomingRequestsListView(generics.ListAPIView):
 
     def get_queryset(self):
         return ShareRequest.objects.filter(share__owner=self.request.user).order_by('-created_at')
+
+
+class NearbySharesAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            radius_km = float(request.query_params.get('radius', '10.0'))
+        except ValueError:
+            radius_km = 10.0
+
+        user_lat = float(request.user.apartment.latitude) if request.user.apartment else 12.9716
+        user_lng = float(request.user.apartment.longitude) if request.user.apartment else 77.5946
+
+        from django.db import connection
+
+        # Haversine spherical trigonometric distance formula in SQL
+        sql_haversine = """
+        WITH share_distances AS (
+            SELECT 
+                s.id,
+                s.title,
+                s.quantity,
+                s.unit,
+                s.status,
+                s.created_at,
+                u.full_name AS owner_name,
+                COALESCE(a.name, 'Independent') AS apartment_name,
+                (6371.0 * acos(
+                    LEAST(1.0, GREATEST(-1.0, 
+                        cos(radians(%s)) * cos(radians(COALESCE(a.latitude, 12.9716))) * 
+                        cos(radians(COALESCE(a.longitude, 77.5946)) - radians(%s)) + 
+                        sin(radians(%s)) * sin(radians(COALESCE(a.latitude, 12.9716)))
+                    ))
+                )) AS distance_km
+            FROM shares_foodshare s
+            JOIN users_customuser u ON s.owner_id = u.id
+            LEFT JOIN apartments_apartment a ON u.apartment_id = a.id
+            WHERE s.status IN ('AVAILABLE', 'PARTIALLY_CLAIMED') AND s.quantity > 0
+        )
+        SELECT id, title, quantity, unit, status, owner_name, apartment_name, distance_km
+        FROM share_distances
+        WHERE distance_km <= %s
+        ORDER BY distance_km ASC;
+        """
+
+        shares = []
+        with connection.cursor() as cursor:
+            cursor.execute(sql_haversine, [user_lat, user_lng, user_lat, radius_km])
+            rows = cursor.fetchall()
+            for r in rows:
+                shares.append({
+                    'id': r[0],
+                    'title': r[1],
+                    'quantity': str(r[2]),
+                    'unit': r[3],
+                    'status': r[4],
+                    'owner_name': r[5],
+                    'apartment_name': r[6],
+                    'distance_km': round(float(r[7]), 2)
+                })
+
+        return Response({
+            'user_location': {'latitude': user_lat, 'longitude': user_lng},
+            'radius_km': radius_km,
+            'count': len(shares),
+            'shares': shares
+        }, status=status.HTTP_200_OK)

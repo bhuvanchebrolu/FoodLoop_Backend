@@ -140,37 +140,40 @@ class AlertSummaryView(APIView):
     def get(self, request):
         ExpiryEngineService.check_and_generate_expiry_notifications(request.user)
 
-        user_items = FoodItem.objects.filter(
-            user=request.user,
-            quantity__gt=0,
-            status__in=[FoodItem.Status.AVAILABLE, FoodItem.Status.EXPIRING_SOON, FoodItem.Status.EXPIRED]
+        from django.db import connection
+
+        # Heavy SQL query with CTE (WITH Clause) and Conditional Aggregate Functions (COUNT CASE WHEN)
+        sql_alerts = """
+        WITH active_items AS (
+            SELECT 
+                id,
+                expiry_date,
+                status
+            FROM foods_fooditem
+            WHERE user_id = %s 
+              AND quantity > 0 
+              AND status IN ('AVAILABLE', 'EXPIRING_SOON', 'EXPIRED')
         )
+        SELECT
+            COUNT(*) AS total_alerts,
+            COUNT(CASE WHEN status = 'EXPIRED' OR expiry_date < CURRENT_DATE THEN 1 END) AS expired_count,
+            COUNT(CASE WHEN status = 'EXPIRING_SOON' AND expiry_date <= CURRENT_DATE + INTERVAL '1 day' AND expiry_date >= CURRENT_DATE THEN 1 END) AS urgent_count,
+            COUNT(CASE WHEN status = 'EXPIRING_SOON' AND expiry_date <= CURRENT_DATE + INTERVAL '5 days' AND expiry_date > CURRENT_DATE + INTERVAL '1 day' THEN 1 END) AS warning_count,
+            COUNT(CASE WHEN status = 'AVAILABLE' AND expiry_date > CURRENT_DATE + INTERVAL '5 days' THEN 1 END) AS good_count
+        FROM active_items;
+        """
 
-        today = timezone.now().date()
-        expired_count = user_items.filter(Q(status=FoodItem.Status.EXPIRED) | Q(expiry_date__lt=today)).count()
-        urgent_count = user_items.filter(
-            status=FoodItem.Status.EXPIRING_SOON,
-            expiry_date__lte=today + timezone.timedelta(days=1),
-            expiry_date__gte=today
-        ).count()
-        warning_count = user_items.filter(
-            status=FoodItem.Status.EXPIRING_SOON,
-            expiry_date__lte=today + timezone.timedelta(days=5),
-            expiry_date__gt=today + timezone.timedelta(days=1)
-        ).count()
-        good_count = user_items.filter(
-            status=FoodItem.Status.AVAILABLE,
-            expiry_date__gt=today + timezone.timedelta(days=5)
-        ).count()
-
-        total_alerts = user_items.count()
+        with connection.cursor() as cursor:
+            cursor.execute(sql_alerts, [request.user.id])
+            row = cursor.fetchone()
+            total_alerts, expired_count, urgent_count, warning_count, good_count = row
 
         data = {
-            'urgent_count': urgent_count,
-            'warning_count': warning_count,
-            'good_count': good_count,
-            'expired_count': expired_count,
-            'total_alerts': total_alerts,
+            'urgent_count': urgent_count or 0,
+            'warning_count': warning_count or 0,
+            'good_count': good_count or 0,
+            'expired_count': expired_count or 0,
+            'total_alerts': total_alerts or 0,
         }
 
         serializer = AlertSummarySerializer(data)

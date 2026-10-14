@@ -19,10 +19,11 @@ class UserSerializer(serializers.ModelSerializer):
             'display_apartment_name',
             'flat_number', 
             'role',
+            'is_active',
             'created_at',
             'updated_at'
         ]
-        read_only_fields = ['id', 'email', 'role', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'email', 'role', 'is_active', 'created_at', 'updated_at']
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):

@@ -6,12 +6,14 @@ from .views import (
     ConsumeFoodView,
     WasteFoodView,
     ConsumptionHistoryView,
-    WasteHistoryView
+    WasteHistoryView,
+    FuzzyFoodSearchAPIView
 )
 
 urlpatterns = [
     path('', FoodItemListCreateView.as_view(), name='food-list-create'),
     path('dashboard/', FoodDashboardView.as_view(), name='food-dashboard'),
+    path('fuzzy-search/', FuzzyFoodSearchAPIView.as_view(), name='food-fuzzy-search'),
     path('<int:id>/', FoodItemDetailView.as_view(), name='food-detail'),
     path('<int:id>/consume/', ConsumeFoodView.as_view(), name='food-consume'),
     path('<int:id>/waste/', WasteFoodView.as_view(), name='food-waste'),

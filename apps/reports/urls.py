@@ -6,7 +6,9 @@ from .views import (
     AdminReportDetailView,
     AdminReportReviewView,
     AdminReportResolveView,
-    AdminReportDismissView
+    AdminReportDismissView,
+    AdminReportSummaryView,
+    AuditLogListView
 )
 
 urlpatterns = [
@@ -16,6 +18,8 @@ urlpatterns = [
 
     # Admin endpoints
     path('admin/list/', AdminReportListView.as_view(), name='admin-report-list'),
+    path('admin/summary/', AdminReportSummaryView.as_view(), name='admin-report-summary'),
+    path('admin/audit-logs/', AuditLogListView.as_view(), name='admin-audit-logs'),
     path('admin/<int:id>/', AdminReportDetailView.as_view(), name='admin-report-detail'),
     path('admin/<int:id>/review/', AdminReportReviewView.as_view(), name='admin-report-review'),
     path('admin/<int:id>/resolve/', AdminReportResolveView.as_view(), name='admin-report-resolve'),

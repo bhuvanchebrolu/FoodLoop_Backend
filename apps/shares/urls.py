@@ -12,12 +12,14 @@ from .views import (
     SavedShareToggleView,
     MySharesListView,
     MyRequestsListView,
-    IncomingRequestsListView
+    IncomingRequestsListView,
+    NearbySharesAPIView
 )
 
 urlpatterns = [
     path('', CommunityShareListView.as_view(), name='share-list'),
     path('create/', FoodShareCreateView.as_view(), name='share-create'),
+    path('nearby/', NearbySharesAPIView.as_view(), name='share-nearby'),
     path('my-shares/', MySharesListView.as_view(), name='my-shares'),
     path('my-requests/', MyRequestsListView.as_view(), name='my-requests'),
     path('incoming-requests/', IncomingRequestsListView.as_view(), name='incoming-requests'),
