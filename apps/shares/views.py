@@ -70,15 +70,44 @@ class CommunityShareListView(generics.ListAPIView):
             saved_subquery = SavedShare.objects.filter(user=user).values('share_id')
             queryset = queryset.filter(id__in=models.Subquery(saved_subquery))
         else:
-            # Community Feed: filter by apartment isolation & active status using nested Q & Subquery
-            if user.apartment:
-                queryset = queryset.filter(
-                    Q(owner__apartment=user.apartment) | Q(owner=user)
-                )
-            elif user.apartment_name_custom:
-                queryset = queryset.filter(
-                    Q(owner__apartment_name_custom__iexact=user.apartment_name_custom) | Q(owner=user)
-                )
+            # Community Feed: Haversine spatial radius filtering or default apartment isolation
+            radius_param = self.request.query_params.get('radius', '').strip()
+            if radius_param and radius_param.upper() != 'ALL':
+                try:
+                    radius_km = float(radius_param)
+                except ValueError:
+                    radius_km = 10.0
+
+                user_lat = float(user.apartment.latitude) if user.apartment and user.apartment.latitude else 12.9716
+                user_lng = float(user.apartment.longitude) if user.apartment and user.apartment.longitude else 77.5946
+
+                from django.db import connection
+                sql_nearby_ids = """
+                SELECT s.id
+                FROM shares_foodshare s
+                JOIN users_customuser u ON s.owner_id = u.id
+                LEFT JOIN apartments_apartment a ON u.apartment_id = a.id
+                WHERE (6371.0 * acos(
+                    LEAST(1.0, GREATEST(-1.0, 
+                        cos(radians(%s)) * cos(radians(COALESCE(a.latitude, 12.9716))) * 
+                        cos(radians(COALESCE(a.longitude, 77.5946)) - radians(%s)) + 
+                        sin(radians(%s)) * sin(radians(COALESCE(a.latitude, 12.9716)))
+                    ))
+                )) <= %s;
+                """
+                with connection.cursor() as cursor:
+                    cursor.execute(sql_nearby_ids, [user_lat, user_lng, user_lat, radius_km])
+                    nearby_ids = [row[0] for row in cursor.fetchall()]
+                queryset = queryset.filter(id__in=nearby_ids)
+            else:
+                if user.apartment:
+                    queryset = queryset.filter(
+                        Q(owner__apartment=user.apartment) | Q(owner=user)
+                    )
+                elif user.apartment_name_custom:
+                    queryset = queryset.filter(
+                        Q(owner__apartment_name_custom__iexact=user.apartment_name_custom) | Q(owner=user)
+                    )
 
             # By default, show active non-expired shares only
             status_param = self.request.query_params.get('status', '').strip().upper()

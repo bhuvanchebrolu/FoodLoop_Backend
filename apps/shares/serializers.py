@@ -20,6 +20,7 @@ class FoodShareSerializer(serializers.ModelSerializer):
     user_request = serializers.SerializerMethodField()
     has_active_request = serializers.SerializerMethodField()
     requests = serializers.SerializerMethodField()
+    distance_km = serializers.SerializerMethodField()
 
     class Meta:
         model = FoodShare
@@ -50,9 +51,37 @@ class FoodShareSerializer(serializers.ModelSerializer):
             'pending_requests_count',
             'user_request',
             'has_active_request',
-            'requests'
+            'requests',
+            'distance_km'
         ]
         read_only_fields = ['id', 'owner', 'status', 'created_at', 'updated_at']
+
+    def get_distance_km(self, obj):
+        request = self.context.get('request')
+        if not request or not getattr(request, 'user', None) or not request.user.is_authenticated:
+            return None
+        if hasattr(obj, 'distance_km'):
+            return round(float(obj.distance_km), 2)
+        user_apt = request.user.apartment
+        owner_apt = obj.owner.apartment if obj.owner else None
+        if not user_apt or not owner_apt:
+            return 0.0 if user_apt == owner_apt else None
+        if user_apt.id == owner_apt.id:
+            return 0.0
+        if user_apt.latitude and user_apt.longitude and owner_apt.latitude and owner_apt.longitude:
+            import math
+            lat1 = math.radians(float(user_apt.latitude))
+            lon1 = math.radians(float(user_apt.longitude))
+            lat2 = math.radians(float(owner_apt.latitude))
+            lon2 = math.radians(float(owner_apt.longitude))
+            d = 6371.0 * math.acos(
+                min(1.0, max(-1.0,
+                    math.cos(lat1) * math.cos(lat2) * math.cos(lon2 - lon1) +
+                    math.sin(lat1) * math.sin(lat2)
+                ))
+            )
+            return round(d, 2)
+        return None
 
     def get_owner(self, obj):
         if obj.owner:
